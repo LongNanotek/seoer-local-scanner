@@ -17,6 +17,18 @@ npm run scan
 `npm install` downloads Playwright. The helper uses your installed Google
 Chrome (Playwright `channel: "chrome"`), so make sure Chrome is installed.
 
+### Or let Claude Code set it up
+
+If you use [Claude Code](https://claude.com/claude-code), paste this into a session
+and approve the commands it asks about:
+
+```
+Clone https://github.com/LongNanotek/seoer-local-scanner.git, run npm install
+in it, then start it with npm run scan in the background and tell me when it
+says it is listening on 127.0.0.1:47319. If Node.js or Chrome is missing, tell
+me what to install first.
+```
+
 Leave the window running. You'll see:
 
 ```
