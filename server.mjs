@@ -41,11 +41,71 @@ function cors(req, res) {
 // rethrow if we genuinely never got a page.
 async function gotoTolerant(page, url) {
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    return await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   } catch (err) {
     await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
     if (!/^https?:/i.test(page.url())) throw err;
+    return null;
   }
+}
+
+// Opens `url` in a browser that has got past any bot check. Tries headless
+// first (no window); if the site blocks it — a 403/429/503 or a Cloudflare
+// interstitial that never clears — closes it and retries in a visible Chrome,
+// which is what clears the challenge for most sites. The caller closes the
+// returned browser.
+async function openClearedPage(url) {
+  for (const headless of [true, false]) {
+    const browser = await chromium.launch({ channel: "chrome", headless });
+    try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const response = await gotoTolerant(page, url);
+      // Wait for the challenge to clear: the interstitial sets the title to
+      // "Just a moment…" and shows "Verifying you are human". Headless gives
+      // up sooner; the visible window gets the full time.
+      await page
+        .waitForFunction(
+          () => {
+            const t = (document.title || "").toLowerCase();
+            const b = (document.body?.innerText || "").toLowerCase();
+            return (
+              !t.includes("just a moment") &&
+              !b.includes("verifying you are human") &&
+              !b.includes("just a moment") &&
+              !b.includes("checking your browser")
+            );
+          },
+          { timeout: headless ? 12000 : 45000 }
+        )
+        .catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      const blocked = await page
+        .evaluate(() => {
+          const t = (document.title || "").toLowerCase();
+          const b = (document.body?.innerText || "").toLowerCase();
+          return (
+            t.includes("just a moment") ||
+            t.includes("attention required") ||
+            /^error 4dd/.test(t) ||
+            b.includes("verifying you are human")
+          );
+        })
+        .catch(() => true);
+      const status = response ? response.status() : 0;
+      if (headless && (blocked || status === 403 || status === 429 || status === 503)) {
+        console.log(`[scan] headless was blocked on ${url} (status ${status}); retrying in a visible Chrome`);
+        await browser.close();
+        continue;
+      }
+      return { browser, context, page };
+    } catch (err) {
+      await browser.close().catch(() => {});
+      if (!headless) throw err;
+      console.log(`[scan] headless failed on ${url} (${err instanceof Error ? err.message : err}); retrying in a visible Chrome`);
+    }
+  }
+  throw new Error("could not open " + url);
 }
 
 function json(res, status, body) {
@@ -114,30 +174,10 @@ async function fetchSiteFiles(context, origin) {
 }
 
 async function scanInBrowser(url) {
-  const browser = await chromium.launch({ channel: "chrome", headless: false });
+  const { browser, context, page } = await openClearedPage(url);
   try {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await gotoTolerant(page, url);
-
     // Wait for the challenge to clear: the interstitial sets the title to
     // "Just a moment…" and shows "Verifying you are human".
-    await page
-      .waitForFunction(
-        () => {
-          const t = (document.title || "").toLowerCase();
-          const b = (document.body?.innerText || "").toLowerCase();
-          return (
-            !t.includes("just a moment") &&
-            !b.includes("verifying you are human") &&
-            !b.includes("just a moment") &&
-            !b.includes("checking your browser")
-          );
-        },
-        { timeout: 45000 }
-      )
-      .catch(() => {});
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
     const domSignals = await page.evaluate(extractSignals);
     const origin = new URL(domSignals.finalUrl).origin;
@@ -294,30 +334,11 @@ async function mapPool(items, limit, fn) {
 }
 
 async function crawlInBrowser(url, maxPages) {
-  const browser = await chromium.launch({ channel: "chrome", headless: false });
+  // One real navigation clears the Cloudflare challenge; every page after
+  // this is a cheap in-page fetch() (see getText) through that same cleared
+  // Chrome session — no rendering per page.
+  const { browser, context, page } = await openClearedPage(url);
   try {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    // One real navigation clears the Cloudflare challenge; every page after
-    // this is a cheap in-page fetch() (see getText) through that same cleared
-    // Chrome session — no rendering per page.
-    await gotoTolerant(page, url);
-    await page
-      .waitForFunction(
-        () => {
-          const t = (document.title || "").toLowerCase();
-          const b = (document.body?.innerText || "").toLowerCase();
-          return (
-            !t.includes("just a moment") &&
-            !b.includes("verifying you are human") &&
-            !b.includes("just a moment") &&
-            !b.includes("checking your browser")
-          );
-        },
-        { timeout: 45000 }
-      )
-      .catch(() => {});
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
     const origin = new URL(page.url()).origin;
     const landing = toLanding(page.url(), origin);

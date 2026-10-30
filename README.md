@@ -40,8 +40,9 @@ SEOer local scan helper listening on http://127.0.0.1:47319
 1. In SEOer, scan a URL. If the site is Cloudflare-blocked, the scan is marked
    **blocked** and the scan page shows a **"Scan on my computer"** button.
 2. Make sure this helper is running, then click the button.
-3. A Chrome window opens, loads the page, and closes on its own. The report
-   appears in SEOer — no copy-paste.
+3. The helper first tries the page in a hidden (headless) Chrome. If the site
+   blocks that (a 403 or a Cloudflare challenge), a Chrome window opens, loads
+   the page, and closes on its own. The report appears in SEOer — no copy-paste.
 
 ## Google rankings (keywords)
 
